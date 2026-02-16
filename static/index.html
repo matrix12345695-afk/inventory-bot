@@ -2,41 +2,127 @@
 <html>
 <head>
 <meta charset="UTF-8">
+
+<meta name="viewport"
+content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+
 <title>Инвентаризация</title>
 
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
 <style>
+* {
+    box-sizing: border-box;
+}
+
 body {
     margin: 0;
     font-family: Arial, sans-serif;
-    background: #111;
+    background: #0f0f0f;
     color: white;
+    overscroll-behavior: none;
 }
+
 .container {
-    padding: 16px;
+    padding: 14px;
 }
+
+h2 {
+    margin-top: 0;
+}
+
 .group {
-    margin-top: 20px;
+    background: #1b1b1b;
+    border-radius: 14px;
+    margin-bottom: 12px;
+    overflow: hidden;
 }
-.item {
+
+.group-header {
+    padding: 14px;
+    font-weight: bold;
+    background: #202020;
     display: flex;
     justify-content: space-between;
-    margin: 8px 0;
+    cursor: pointer;
 }
-input {
-    width: 70px;
-    background: #222;
-    color: white;
-    border: 1px solid #444;
-    padding: 4px;
+
+.items {
+    display: none;
+    padding: 10px;
 }
-button {
-    margin-top: 20px;
-    width: 100%;
-    padding: 12px;
-    background: #2ea6ff;
+
+.item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.item-name {
+    flex: 1;
+    font-size: 14px;
+    padding-right: 8px;
+}
+
+.calc-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.calc-box input {
+    width: 55px;
+    padding: 6px;
+    background: #2b2b2b;
     border: none;
+    color: white;
+    text-align: center;
+    border-radius: 6px;
+}
+
+.total {
+    width: 55px;
+    text-align: center;
+    background: #111;
+    border-radius: 6px;
+    padding: 6px;
+}
+
+.plus-btn {
+    background: #2b2b2b;
+    border: none;
+    color: white;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    font-size: 18px;
+}
+
+.footer {
+    position: sticky;
+    bottom: 0;
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.save-btn {
+    flex: 1;
+    padding: 14px;
+    background: #2e8b57;
+    border: none;
+    border-radius: 12px;
+    color: white;
+    font-size: 16px;
+}
+
+.clear-btn {
+    flex: 1;
+    padding: 14px;
+    background: #8b2e2e;
+    border: none;
+    border-radius: 12px;
     color: white;
     font-size: 16px;
 }
@@ -44,112 +130,151 @@ button {
 </head>
 
 <body>
-<div class="container" id="app"></div>
+<div class="container">
+
+<h2 id="sectionTitle"></h2>
+<div id="groups"></div>
+
+<div class="footer">
+<button class="save-btn" onclick="saveInventory()">💾 Сохранить</button>
+<button class="clear-btn" onclick="clearAll()">🗑 Очистить</button>
+</div>
+
+</div>
 
 <script>
 
-// 🔥 Безопасная инициализация Telegram
+// 🔥 Telegram Mini App фикс
 let tg = null;
 
 if (window.Telegram && Telegram.WebApp) {
     tg = Telegram.WebApp;
     tg.ready();
     tg.expand();
+    tg.disableVerticalSwipes();
 }
 
 const params = new URLSearchParams(window.location.search);
 const section = params.get("section") || "shop";
 
+document.getElementById("sectionTitle").textContent =
+    section.charAt(0).toUpperCase() + section.slice(1);
+
 async function loadData() {
-    try {
-        const res = await fetch(`/data/${section}.json`);
-        const data = await res.json();
-        render(data);
-    } catch (e) {
-        document.getElementById("app").innerHTML =
-            "<h3>Ошибка загрузки данных</h3>";
-        console.error(e);
-    }
+    const res = await fetch(`/data/${section}.json`);
+    const data = await res.json();
+    renderGroups(data);
 }
 
-function render(data) {
-    const app = document.getElementById("app");
-    app.innerHTML = "";
+function renderGroups(data) {
+
+    const container = document.getElementById("groups");
+    container.innerHTML = "";
 
     data.forEach(group => {
 
         const groupDiv = document.createElement("div");
         groupDiv.className = "group";
 
-        const title = document.createElement("h3");
-        title.textContent = group.group;
-        groupDiv.appendChild(title);
+        const header = document.createElement("div");
+        header.className = "group-header";
+        header.innerHTML = `<span>${group.group}</span><span>▼</span>`;
+
+        const itemsDiv = document.createElement("div");
+        itemsDiv.className = "items";
+
+        header.onclick = () => {
+            itemsDiv.style.display =
+                itemsDiv.style.display === "block" ? "none" : "block";
+        };
 
         group.items.forEach(item => {
 
             const itemDiv = document.createElement("div");
             itemDiv.className = "item";
 
-            const name = document.createElement("span");
+            const name = document.createElement("div");
+            name.className = "item-name";
             name.textContent = item.name;
+
+            const calcBox = document.createElement("div");
+            calcBox.className = "calc-box";
 
             const input = document.createElement("input");
             input.type = "number";
             input.min = "0";
-            input.dataset.article = item.article;
+
+            const plus = document.createElement("button");
+            plus.className = "plus-btn";
+            plus.textContent = "+";
+
+            const total = document.createElement("div");
+            total.className = "total";
+            total.textContent = "0";
+
+            total.dataset.article = item.article;
+            total.dataset.group = group.group;
+
+            plus.onclick = () => {
+                const value = parseFloat(input.value || 0);
+                const current = parseFloat(total.textContent);
+                total.textContent = current + value;
+                input.value = "";
+            };
+
+            calcBox.appendChild(input);
+            calcBox.appendChild(plus);
+            calcBox.appendChild(total);
 
             itemDiv.appendChild(name);
-            itemDiv.appendChild(input);
-            groupDiv.appendChild(itemDiv);
+            itemDiv.appendChild(calcBox);
+
+            itemsDiv.appendChild(itemDiv);
         });
 
-        app.appendChild(groupDiv);
+        groupDiv.appendChild(header);
+        groupDiv.appendChild(itemsDiv);
+        container.appendChild(groupDiv);
     });
+}
 
-    const saveBtn = document.createElement("button");
-    saveBtn.textContent = "Сохранить";
-    saveBtn.onclick = saveInventory;
-
-    app.appendChild(saveBtn);
+function clearAll() {
+    document.querySelectorAll(".total").forEach(t => t.textContent = "0");
 }
 
 async function saveInventory() {
 
-    const inputs = document.querySelectorAll("input");
+    const totals = document.querySelectorAll(".total");
     const items = [];
 
-    inputs.forEach(input => {
-        if (input.value && parseFloat(input.value) > 0) {
+    totals.forEach(t => {
+        const qty = parseFloat(t.textContent);
+        if (qty > 0) {
             items.push({
-                article: input.dataset.article,
-                group: "",
-                qty: parseFloat(input.value)
+                article: t.dataset.article,
+                group: t.dataset.group,
+                qty: qty
             });
         }
     });
 
     if (!items.length) {
-        alert("Нет данных для сохранения");
+        alert("Нет данных");
         return;
     }
 
-    const payload = {
-        user_id: tg?.initDataUnsafe?.user?.id || 0,
-        filename: section + "_" + Date.now(),
-        items: items
-    };
-
     await fetch("/save_inventory", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload)
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            user_id: tg?.initDataUnsafe?.user?.id || 0,
+            filename: section + "_" + Date.now(),
+            items: items
+        })
     });
 
     alert("Сохранено");
-
-    if (tg) {
-        tg.close();
-    }
+    clearAll();
 }
 
 loadData();
