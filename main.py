@@ -30,7 +30,6 @@ import uvicorn
 # ==========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен")
 
@@ -49,19 +48,14 @@ os.makedirs(INVENTORY_FOLDER, exist_ok=True)
 
 
 # ==========================
-# LOGGING
-# ==========================
-
-logging.basicConfig(level=logging.INFO)
-
-
-# ==========================
 # INIT
 # ==========================
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = FastAPI()
+
+logging.basicConfig(level=logging.INFO)
 
 
 def init_db():
@@ -94,19 +88,21 @@ init_db()
 @dp.message(CommandStart())
 async def start(message: Message):
 
+    uid = message.from_user.id
+
     keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [
                 KeyboardButton(
                     text="🛒 Магазин",
                     web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=shop"
+                        url=f"{BASE_WEB_URL}/?section=shop&uid={uid}"
                     )
                 ),
                 KeyboardButton(
                     text="🍳 Кухня",
                     web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=kitchen"
+                        url=f"{BASE_WEB_URL}/?section=kitchen&uid={uid}"
                     )
                 ),
             ],
@@ -114,13 +110,13 @@ async def start(message: Message):
                 KeyboardButton(
                     text="🍸 Бар",
                     web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=bar"
+                        url=f"{BASE_WEB_URL}/?section=bar&uid={uid}"
                     )
                 ),
                 KeyboardButton(
                     text="❄ Морозилка",
                     web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=freezer"
+                        url=f"{BASE_WEB_URL}/?section=freezer&uid={uid}"
                     )
                 ),
             ],
@@ -224,7 +220,7 @@ async def list_inventories(message: Message):
 
 
 # ==========================
-# EXPORT TO EXCEL
+# EXPORT
 # ==========================
 
 @dp.callback_query(F.data.startswith("export::"))

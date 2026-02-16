@@ -48,11 +48,6 @@ body {
     margin-bottom: 10px;
 }
 
-.item-name {
-    flex: 1;
-    font-size: 14px;
-}
-
 .calc {
     display: flex;
     gap: 6px;
@@ -119,6 +114,7 @@ body {
 </div>
 
 <script>
+
 let tg = null;
 
 if (window.Telegram && Telegram.WebApp) {
@@ -130,6 +126,7 @@ if (window.Telegram && Telegram.WebApp) {
 
 const params = new URLSearchParams(window.location.search);
 const section = params.get("section") || "shop";
+const userId = params.get("uid");
 
 document.getElementById("title").textContent =
     section.charAt(0).toUpperCase() + section.slice(1);
@@ -168,7 +165,6 @@ function render(data) {
             row.className = "item";
 
             const name = document.createElement("div");
-            name.className = "item-name";
             name.textContent = item.name;
 
             const calc = document.createElement("div");
@@ -176,7 +172,6 @@ function render(data) {
 
             const input = document.createElement("input");
             input.type = "number";
-            input.min = "0";
 
             const plus = document.createElement("button");
             plus.className = "plus";
@@ -212,18 +207,16 @@ function render(data) {
 }
 
 function clearAll() {
-    document.querySelectorAll(".calc input[type='number']:last-child")
+    document.querySelectorAll(".calc input:last-child")
         .forEach(i => i.value = "0");
 }
 
 async function saveInventory() {
 
     const filename = prompt("Введите название инвентаризации:");
-
     if (!filename) return;
 
-    const totals = document.querySelectorAll(".calc input[type='number']:last-child");
-
+    const totals = document.querySelectorAll(".calc input:last-child");
     const items = [];
 
     totals.forEach(t => {
@@ -241,18 +234,17 @@ async function saveInventory() {
         return;
     }
 
-    const res = await fetch("/save_inventory", {
+    await fetch("/save_inventory", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
-            user_id: tg?.initDataUnsafe?.user?.id || 0,
+            user_id: parseInt(userId),
             filename: filename,
             items: items
         })
     });
 
-    const data = await res.json();
-    alert("Сохранено: " + data.count);
+    alert("Сохранено");
     clearAll();
 }
 
