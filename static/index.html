@@ -1,0 +1,159 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Инвентаризация</title>
+
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+<style>
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #111;
+    color: white;
+}
+.container {
+    padding: 16px;
+}
+.group {
+    margin-top: 20px;
+}
+.item {
+    display: flex;
+    justify-content: space-between;
+    margin: 8px 0;
+}
+input {
+    width: 70px;
+    background: #222;
+    color: white;
+    border: 1px solid #444;
+    padding: 4px;
+}
+button {
+    margin-top: 20px;
+    width: 100%;
+    padding: 12px;
+    background: #2ea6ff;
+    border: none;
+    color: white;
+    font-size: 16px;
+}
+</style>
+</head>
+
+<body>
+<div class="container" id="app"></div>
+
+<script>
+
+// 🔥 Безопасная инициализация Telegram
+let tg = null;
+
+if (window.Telegram && Telegram.WebApp) {
+    tg = Telegram.WebApp;
+    tg.ready();
+    tg.expand();
+}
+
+const params = new URLSearchParams(window.location.search);
+const section = params.get("section") || "shop";
+
+async function loadData() {
+    try {
+        const res = await fetch(`/data/${section}.json`);
+        const data = await res.json();
+        render(data);
+    } catch (e) {
+        document.getElementById("app").innerHTML =
+            "<h3>Ошибка загрузки данных</h3>";
+        console.error(e);
+    }
+}
+
+function render(data) {
+    const app = document.getElementById("app");
+    app.innerHTML = "";
+
+    data.forEach(group => {
+
+        const groupDiv = document.createElement("div");
+        groupDiv.className = "group";
+
+        const title = document.createElement("h3");
+        title.textContent = group.group;
+        groupDiv.appendChild(title);
+
+        group.items.forEach(item => {
+
+            const itemDiv = document.createElement("div");
+            itemDiv.className = "item";
+
+            const name = document.createElement("span");
+            name.textContent = item.name;
+
+            const input = document.createElement("input");
+            input.type = "number";
+            input.min = "0";
+            input.dataset.article = item.article;
+
+            itemDiv.appendChild(name);
+            itemDiv.appendChild(input);
+            groupDiv.appendChild(itemDiv);
+        });
+
+        app.appendChild(groupDiv);
+    });
+
+    const saveBtn = document.createElement("button");
+    saveBtn.textContent = "Сохранить";
+    saveBtn.onclick = saveInventory;
+
+    app.appendChild(saveBtn);
+}
+
+async function saveInventory() {
+
+    const inputs = document.querySelectorAll("input");
+    const items = [];
+
+    inputs.forEach(input => {
+        if (input.value && parseFloat(input.value) > 0) {
+            items.push({
+                article: input.dataset.article,
+                group: "",
+                qty: parseFloat(input.value)
+            });
+        }
+    });
+
+    if (!items.length) {
+        alert("Нет данных для сохранения");
+        return;
+    }
+
+    const payload = {
+        user_id: tg?.initDataUnsafe?.user?.id || 0,
+        filename: section + "_" + Date.now(),
+        items: items
+    };
+
+    await fetch("/save_inventory", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+    });
+
+    alert("Сохранено");
+
+    if (tg) {
+        tg.close();
+    }
+}
+
+loadData();
+
+</script>
+</body>
+</html>
