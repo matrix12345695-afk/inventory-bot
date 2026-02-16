@@ -1,0 +1,4 @@
+﻿inventory.db
+__pycache__/
+.env
+inventories/

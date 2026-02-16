@@ -1,0 +1,282 @@
+﻿import os
+import json
+import sqlite3
+import pandas as pd
+import asyncio
+import logging
+import threading
+from datetime import datetime
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import (
+    Message,
+    FSInputFile,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    CallbackQuery
+)
+from aiogram.filters import CommandStart
+from aiogram.types.web_app_info import WebAppInfo
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+import uvicorn
+
+
+# ==============================
+# НАСТРОЙКИ
+# ==============================
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+BASE_WEB_URL = os.getenv("BASE_WEB_URL")
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "inventory.db")
+INVENTORY_FOLDER = os.path.join(BASE_DIR, "inventories")
+
+os.makedirs(INVENTORY_FOLDER, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+app = FastAPI()
+
+
+# ==============================
+# СОЗДАНИЕ БАЗЫ
+# ==============================
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS inventory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            filename TEXT,
+            article TEXT,
+            group_name TEXT,
+            qty REAL,
+            created_at TEXT
+        )
+    """)
+
+    conn.commit()
+    conn.close()
+
+
+init_db()
+
+
+# ==============================
+# TELEGRAM START
+# ==============================
+
+@dp.message(CommandStart())
+async def start(message: Message):
+
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(
+                    text="🛒 Магазин",
+                    web_app=WebAppInfo(
+                        url=f"{BASE_WEB_URL}/?section=shop"
+                    )
+                ),
+                KeyboardButton(
+                    text="🍳 Кухня",
+                    web_app=WebAppInfo(
+                        url=f"{BASE_WEB_URL}/?section=kitchen"
+                    )
+                ),
+            ],
+            [
+                KeyboardButton(
+                    text="🍸 Бар",
+                    web_app=WebAppInfo(
+                        url=f"{BASE_WEB_URL}/?section=bar"
+                    )
+                ),
+                KeyboardButton(
+                    text="❄ Морозилка",
+                    web_app=WebAppInfo(
+                        url=f"{BASE_WEB_URL}/?section=freezer"
+                    )
+                ),
+            ],
+            [
+                KeyboardButton(text="📊 Инвентаризации")
+            ]
+        ],
+        resize_keyboard=True
+    )
+
+    await message.answer("Выберите раздел:", reply_markup=keyboard)
+
+
+# ==============================
+# СПИСОК ИНВЕНТАРИЗАЦИЙ
+# ==============================
+
+@dp.message(F.text == "📊 Инвентаризации")
+async def list_inventories(message: Message):
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT filename, COUNT(*)
+        FROM inventory
+        WHERE user_id = ?
+        GROUP BY filename
+        ORDER BY MAX(created_at) DESC
+    """, (message.from_user.id,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        await message.answer("Нет сохранённых инвентаризаций.")
+        return
+
+    buttons = []
+    for filename, count in rows:
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"📁 {filename} ({count})",
+                callback_data=f"export::{filename}"
+            )
+        ])
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await message.answer("📊 Выберите инвентаризацию:", reply_markup=keyboard)
+
+
+# ==============================
+# ЭКСПОРТ В EXCEL
+# ==============================
+
+@dp.callback_query(F.data.startswith("export::"))
+async def export_inventory(callback: CallbackQuery):
+
+    filename = callback.data.split("::")[1]
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT article, group_name, qty
+        FROM inventory
+        WHERE filename = ? AND user_id = ?
+    """, (filename, callback.from_user.id))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    if not rows:
+        await callback.answer("Данные не найдены", show_alert=True)
+        return
+
+    df = pd.DataFrame(rows, columns=[
+        "Артикул",
+        "Группа",
+        "Количество"
+    ])
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    save_path = os.path.join(
+        INVENTORY_FOLDER,
+        f"{filename}_{timestamp}.xlsx"
+    )
+
+    df.to_excel(save_path, index=False)
+
+    await callback.message.answer_document(
+        FSInputFile(save_path),
+        caption=f"✅ Инвентаризация выгружена\nПозиций: {len(rows)}"
+    )
+
+    await callback.answer()
+    logging.info(f"📄 Excel создан: {save_path}")
+
+
+# ==============================
+# FASTAPI API
+# ==============================
+
+@app.post("/save_inventory")
+async def save_inventory(request: Request):
+
+    data = await request.json()
+
+    user_id = data.get("user_id")
+    filename = data.get("filename")
+    items = data.get("items", [])
+
+    if not user_id or not filename or not items:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Неверные данные"}
+        )
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    for item in items:
+        cur.execute("""
+            INSERT INTO inventory
+            (user_id, filename, article, group_name, qty, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (
+            user_id,
+            filename,
+            item["article"],
+            item["group"],
+            item["qty"],
+            datetime.now().isoformat()
+        ))
+
+    conn.commit()
+    conn.close()
+
+    return {"count": len(items)}
+
+
+# ==============================
+# СТАТИКА
+# ==============================
+
+app.mount("/data", StaticFiles(directory="data"), name="data")
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+
+# ==============================
+# ЗАПУСК
+# ==============================
+
+def start_bot():
+    asyncio.run(dp.start_polling(bot))
+
+
+if __name__ == "__main__":
+
+    if not BOT_TOKEN:
+        raise ValueError("BOT_TOKEN не установлен")
+
+    if not BASE_WEB_URL:
+        raise ValueError("BASE_WEB_URL не установлен")
+
+    threading.Thread(target=start_bot).start()
+
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
