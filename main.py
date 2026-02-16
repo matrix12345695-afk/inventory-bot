@@ -26,17 +26,16 @@ import uvicorn
 
 
 # ==============================
-# ENV
+# CONFIG
 # ==============================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-BASE_WEB_URL = os.getenv("BASE_WEB_URL")
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен")
 
-if not BASE_WEB_URL:
-    raise ValueError("BASE_WEB_URL не установлен")
+# 🔥 Жёстко указываем Render адрес
+BASE_WEB_URL = "https://inventory-bot-muyu.onrender.com"
 
 
 # ==============================
@@ -70,7 +69,7 @@ app = FastAPI()
 
 
 # ==============================
-# DATABASE INIT
+# DATABASE
 # ==============================
 
 def init_db():
@@ -97,7 +96,7 @@ init_db()
 
 
 # ==============================
-# TELEGRAM START
+# START COMMAND
 # ==============================
 
 @dp.message(CommandStart())
@@ -141,92 +140,6 @@ async def start(message: Message):
     )
 
     await message.answer("Выберите раздел:", reply_markup=keyboard)
-
-
-# ==============================
-# INVENTORY LIST
-# ==============================
-
-@dp.message(F.text == "📊 Инвентаризации")
-async def list_inventories(message: Message):
-
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT filename, COUNT(*)
-        FROM inventory
-        WHERE user_id = ?
-        GROUP BY filename
-        ORDER BY MAX(created_at) DESC
-    """, (message.from_user.id,))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    if not rows:
-        await message.answer("Нет сохранённых инвентаризаций.")
-        return
-
-    buttons = []
-    for filename, count in rows:
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"📁 {filename} ({count})",
-                callback_data=f"export::{filename}"
-            )
-        ])
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-
-    await message.answer("📊 Выберите инвентаризацию:", reply_markup=keyboard)
-
-
-# ==============================
-# EXPORT TO EXCEL
-# ==============================
-
-@dp.callback_query(F.data.startswith("export::"))
-async def export_inventory(callback: CallbackQuery):
-
-    filename = callback.data.split("::")[1]
-
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT article, group_name, qty
-        FROM inventory
-        WHERE filename = ? AND user_id = ?
-    """, (filename, callback.from_user.id))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    if not rows:
-        await callback.answer("Данные не найдены", show_alert=True)
-        return
-
-    df = pd.DataFrame(rows, columns=[
-        "Артикул",
-        "Группа",
-        "Количество"
-    ])
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path = os.path.join(
-        INVENTORY_FOLDER,
-        f"{filename}_{timestamp}.xlsx"
-    )
-
-    df.to_excel(save_path, index=False)
-
-    await callback.message.answer_document(
-        FSInputFile(save_path),
-        caption=f"✅ Инвентаризация выгружена\nПозиций: {len(rows)}"
-    )
-
-    await callback.answer()
 
 
 # ==============================
