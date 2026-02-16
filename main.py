@@ -1,5 +1,4 @@
 ﻿import os
-import json
 import sqlite3
 import pandas as pd
 import asyncio
@@ -27,11 +26,22 @@ import uvicorn
 
 
 # ==============================
-# НАСТРОЙКИ
+# ENV
 # ==============================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 BASE_WEB_URL = os.getenv("BASE_WEB_URL")
+
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не установлен")
+
+if not BASE_WEB_URL:
+    raise ValueError("BASE_WEB_URL не установлен")
+
+
+# ==============================
+# PATHS
+# ==============================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "inventory.db")
@@ -39,10 +49,20 @@ INVENTORY_FOLDER = os.path.join(BASE_DIR, "inventories")
 
 os.makedirs(INVENTORY_FOLDER, exist_ok=True)
 
+
+# ==============================
+# LOGGING
+# ==============================
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
+
+
+# ==============================
+# BOT + APP
+# ==============================
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -50,7 +70,7 @@ app = FastAPI()
 
 
 # ==============================
-# СОЗДАНИЕ БАЗЫ
+# DATABASE INIT
 # ==============================
 
 def init_db():
@@ -124,7 +144,7 @@ async def start(message: Message):
 
 
 # ==============================
-# СПИСОК ИНВЕНТАРИЗАЦИЙ
+# INVENTORY LIST
 # ==============================
 
 @dp.message(F.text == "📊 Инвентаризации")
@@ -163,7 +183,7 @@ async def list_inventories(message: Message):
 
 
 # ==============================
-# ЭКСПОРТ В EXCEL
+# EXPORT TO EXCEL
 # ==============================
 
 @dp.callback_query(F.data.startswith("export::"))
@@ -207,11 +227,10 @@ async def export_inventory(callback: CallbackQuery):
     )
 
     await callback.answer()
-    logging.info(f"📄 Excel создан: {save_path}")
 
 
 # ==============================
-# FASTAPI API
+# SAVE INVENTORY API
 # ==============================
 
 @app.post("/save_inventory")
@@ -253,7 +272,7 @@ async def save_inventory(request: Request):
 
 
 # ==============================
-# СТАТИКА
+# STATIC FILES
 # ==============================
 
 app.mount("/data", StaticFiles(directory="data"), name="data")
@@ -261,7 +280,7 @@ app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
 # ==============================
-# ЗАПУСК
+# START
 # ==============================
 
 def start_bot():
@@ -269,12 +288,6 @@ def start_bot():
 
 
 if __name__ == "__main__":
-
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN не установлен")
-
-    if not BASE_WEB_URL:
-        raise ValueError("BASE_WEB_URL не установлен")
 
     threading.Thread(target=start_bot).start()
 
