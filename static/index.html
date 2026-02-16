@@ -2,33 +2,22 @@
 <html>
 <head>
 <meta charset="UTF-8">
-
 <meta name="viewport"
 content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 
 <title>Инвентаризация</title>
-
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 
 <style>
-* {
-    box-sizing: border-box;
-}
-
 body {
     margin: 0;
     font-family: Arial, sans-serif;
     background: #0f0f0f;
     color: white;
-    overscroll-behavior: none;
 }
 
 .container {
     padding: 14px;
-}
-
-h2 {
-    margin-top: 0;
 }
 
 .group {
@@ -54,47 +43,38 @@ h2 {
 
 .item {
     display: flex;
-    align-items: center;
     justify-content: space-between;
+    align-items: center;
     margin-bottom: 10px;
 }
 
 .item-name {
     flex: 1;
     font-size: 14px;
-    padding-right: 8px;
 }
 
-.calc-box {
+.calc {
     display: flex;
-    align-items: center;
     gap: 6px;
+    align-items: center;
 }
 
-.calc-box input {
+.calc input {
     width: 55px;
-    padding: 6px;
     background: #2b2b2b;
     border: none;
     color: white;
     text-align: center;
     border-radius: 6px;
-}
-
-.total {
-    width: 55px;
-    text-align: center;
-    background: #111;
-    border-radius: 6px;
     padding: 6px;
 }
 
-.plus-btn {
-    background: #2b2b2b;
-    border: none;
-    color: white;
+.plus {
     width: 30px;
     height: 30px;
+    background: #2b2b2b;
+    border: none;
+    color: white;
     border-radius: 8px;
     font-size: 18px;
 }
@@ -107,44 +87,38 @@ h2 {
     margin-top: 20px;
 }
 
-.save-btn {
+.save {
     flex: 1;
     padding: 14px;
     background: #2e8b57;
     border: none;
     border-radius: 12px;
     color: white;
-    font-size: 16px;
 }
 
-.clear-btn {
+.clear {
     flex: 1;
     padding: 14px;
     background: #8b2e2e;
     border: none;
     border-radius: 12px;
     color: white;
-    font-size: 16px;
 }
 </style>
 </head>
 
 <body>
 <div class="container">
-
-<h2 id="sectionTitle"></h2>
+<h2 id="title"></h2>
 <div id="groups"></div>
 
 <div class="footer">
-<button class="save-btn" onclick="saveInventory()">💾 Сохранить</button>
-<button class="clear-btn" onclick="clearAll()">🗑 Очистить</button>
+<button class="save" onclick="saveInventory()">💾 Сохранить</button>
+<button class="clear" onclick="clearAll()">🗑 Очистить</button>
 </div>
-
 </div>
 
 <script>
-
-// 🔥 Telegram Mini App фикс
 let tg = null;
 
 if (window.Telegram && Telegram.WebApp) {
@@ -157,103 +131,107 @@ if (window.Telegram && Telegram.WebApp) {
 const params = new URLSearchParams(window.location.search);
 const section = params.get("section") || "shop";
 
-document.getElementById("sectionTitle").textContent =
+document.getElementById("title").textContent =
     section.charAt(0).toUpperCase() + section.slice(1);
 
 async function loadData() {
     const res = await fetch(`/data/${section}.json`);
     const data = await res.json();
-    renderGroups(data);
+    render(data);
 }
 
-function renderGroups(data) {
+function render(data) {
 
     const container = document.getElementById("groups");
     container.innerHTML = "";
 
     data.forEach(group => {
 
-        const groupDiv = document.createElement("div");
-        groupDiv.className = "group";
+        const g = document.createElement("div");
+        g.className = "group";
 
         const header = document.createElement("div");
         header.className = "group-header";
         header.innerHTML = `<span>${group.group}</span><span>▼</span>`;
 
-        const itemsDiv = document.createElement("div");
-        itemsDiv.className = "items";
+        const items = document.createElement("div");
+        items.className = "items";
 
         header.onclick = () => {
-            itemsDiv.style.display =
-                itemsDiv.style.display === "block" ? "none" : "block";
+            items.style.display =
+                items.style.display === "block" ? "none" : "block";
         };
 
         group.items.forEach(item => {
 
-            const itemDiv = document.createElement("div");
-            itemDiv.className = "item";
+            const row = document.createElement("div");
+            row.className = "item";
 
             const name = document.createElement("div");
             name.className = "item-name";
             name.textContent = item.name;
 
-            const calcBox = document.createElement("div");
-            calcBox.className = "calc-box";
+            const calc = document.createElement("div");
+            calc.className = "calc";
 
             const input = document.createElement("input");
             input.type = "number";
             input.min = "0";
 
             const plus = document.createElement("button");
-            plus.className = "plus-btn";
+            plus.className = "plus";
             plus.textContent = "+";
 
-            const total = document.createElement("div");
-            total.className = "total";
-            total.textContent = "0";
-
+            const total = document.createElement("input");
+            total.type = "number";
+            total.value = "0";
             total.dataset.article = item.article;
             total.dataset.group = group.group;
 
             plus.onclick = () => {
-                const value = parseFloat(input.value || 0);
-                const current = parseFloat(total.textContent);
-                total.textContent = current + value;
+                total.value =
+                    parseFloat(total.value || 0) +
+                    parseFloat(input.value || 0);
                 input.value = "";
             };
 
-            calcBox.appendChild(input);
-            calcBox.appendChild(plus);
-            calcBox.appendChild(total);
+            calc.appendChild(input);
+            calc.appendChild(plus);
+            calc.appendChild(total);
 
-            itemDiv.appendChild(name);
-            itemDiv.appendChild(calcBox);
+            row.appendChild(name);
+            row.appendChild(calc);
 
-            itemsDiv.appendChild(itemDiv);
+            items.appendChild(row);
         });
 
-        groupDiv.appendChild(header);
-        groupDiv.appendChild(itemsDiv);
-        container.appendChild(groupDiv);
+        g.appendChild(header);
+        g.appendChild(items);
+        container.appendChild(g);
     });
 }
 
 function clearAll() {
-    document.querySelectorAll(".total").forEach(t => t.textContent = "0");
+    document.querySelectorAll(".calc input[type='number']:last-child")
+        .forEach(i => i.value = "0");
 }
 
 async function saveInventory() {
 
-    const totals = document.querySelectorAll(".total");
+    const filename = prompt("Введите название инвентаризации:");
+
+    if (!filename) return;
+
+    const totals = document.querySelectorAll(".calc input[type='number']:last-child");
+
     const items = [];
 
     totals.forEach(t => {
-        const qty = parseFloat(t.textContent);
-        if (qty > 0) {
+        if (parseFloat(t.value) > 0) {
             items.push({
                 article: t.dataset.article,
                 group: t.dataset.group,
-                qty: qty
+                qty: parseFloat(t.value)
             });
         }
     });
@@ -263,22 +241,22 @@ async function saveInventory() {
         return;
     }
 
-    await fetch("/save_inventory", {
+    const res = await fetch("/save_inventory", {
         method: "POST",
         headers: {"Content-Type": "application/json"},
         body: JSON.stringify({
             user_id: tg?.initDataUnsafe?.user?.id || 0,
-            filename: section + "_" + Date.now(),
+            filename: filename,
             items: items
         })
     });
 
-    alert("Сохранено");
+    const data = await res.json();
+    alert("Сохранено: " + data.count);
     clearAll();
 }
 
 loadData();
-
 </script>
 </body>
 </html>
