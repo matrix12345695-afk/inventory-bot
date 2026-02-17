@@ -273,11 +273,10 @@ app.mount("/", StaticFiles(directory="static", html=True), name="static")
 # START
 # ==========================
 
-def start_bot():
-    asyncio.run(dp.start_polling(bot))
-
+@app.on_event("startup")
+async def on_startup():
+    asyncio.create_task(dp.start_polling(bot))
 
 if __name__ == "__main__":
-    threading.Thread(target=start_bot).start()
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
