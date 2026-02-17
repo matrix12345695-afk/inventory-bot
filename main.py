@@ -73,9 +73,40 @@ async def start(message: Message):
     uid = message.from_user.id
 
     buttons = [
-        [KeyboardButton(text="📊 Инвентаризации")]
+        [
+            KeyboardButton(
+                text="🛒 Магазин",
+                web_app=WebAppInfo(
+                    url=f"{BASE_WEB_URL}/?section=shop&uid={uid}"
+                )
+            ),
+            KeyboardButton(
+                text="🍳 Кухня",
+                web_app=WebAppInfo(
+                    url=f"{BASE_WEB_URL}/?section=kitchen&uid={uid}"
+                )
+            ),
+        ],
+        [
+            KeyboardButton(
+                text="🍸 Бар",
+                web_app=WebAppInfo(
+                    url=f"{BASE_WEB_URL}/?section=bar&uid={uid}"
+                )
+            ),
+            KeyboardButton(
+                text="❄ Морозилка",
+                web_app=WebAppInfo(
+                    url=f"{BASE_WEB_URL}/?section=freezer&uid={uid}"
+                )
+            ),
+        ],
+        [
+            KeyboardButton(text="📊 Инвентаризации")
+        ]
     ]
 
+    # 👑 Кнопка админа
     if uid in ADMIN_IDS:
         buttons.append([KeyboardButton(text="👑 Админ панель")])
 
@@ -85,6 +116,7 @@ async def start(message: Message):
     )
 
     await message.answer("Главное меню:", reply_markup=keyboard)
+
 
 
 # ================= SAVE =================
