@@ -1,7 +1,5 @@
 ﻿import os
-import sqlite3
 import pandas as pd
-import asyncio
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
@@ -12,7 +10,8 @@ from aiogram.types import (
     KeyboardButton,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    CallbackQuery
+    CallbackQuery,
+    Update
 )
 from aiogram.filters import CommandStart
 from aiogram.types.web_app_info import WebAppInfo
@@ -20,44 +19,50 @@ from aiogram.types.web_app_info import WebAppInfo
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+import psycopg2
 import uvicorn
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
+BASE_WEB_URL = "https://inventory-bot-muyu.onrender.com"
+
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен")
 
-BASE_WEB_URL = "https://inventory-bot-muyu.onrender.com"
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, "inventory.db")
-INVENTORY_FOLDER = os.path.join(BASE_DIR, "inventories")
-
-os.makedirs(INVENTORY_FOLDER, exist_ok=True)
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL не установлен")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = FastAPI()
 
 
+# ================= DATABASE =================
+
+def get_conn():
+    return psycopg2.connect(DATABASE_URL)
+
+
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
         CREATE TABLE IF NOT EXISTS inventory (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
             filename TEXT,
             article TEXT,
             name TEXT,
             group_name TEXT,
-            qty REAL,
-            created_at TEXT
-        )
+            qty NUMERIC,
+            created_at TIMESTAMP
+        );
     """)
 
     conn.commit()
+    cur.close()
     conn.close()
 
 
@@ -125,16 +130,14 @@ async def save_inventory(request: Request):
     if not user_id or not filename or not items:
         return JSONResponse(status_code=400, content={"error": "Неверные данные"})
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
-
-    created_at = datetime.now().isoformat()
 
     for item in items:
         cur.execute("""
             INSERT INTO inventory
             (user_id, filename, article, name, group_name, qty, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
             user_id,
             filename,
@@ -142,50 +145,14 @@ async def save_inventory(request: Request):
             item["name"],
             item["group"],
             item["qty"],
-            created_at
+            datetime.now()
         ))
 
     conn.commit()
+    cur.close()
     conn.close()
-
-    df = pd.DataFrame(items)
-    df = df[["article", "name", "group", "qty"]]
-    df.columns = ["Артикул", "Наименование", "Группа", "Количество"]
-
-    excel_path = os.path.join(
-        INVENTORY_FOLDER,
-        f"{filename}.xlsx"
-    )
-
-    df.to_excel(excel_path, index=False)
 
     return {"count": len(items)}
-
-
-# ================= LOAD LAST =================
-
-@app.get("/load_last_inventory")
-async def load_last_inventory(user_id: int):
-
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT article, qty
-        FROM inventory
-        WHERE user_id = ?
-        ORDER BY id DESC
-    """, (user_id,))
-
-    rows = cur.fetchall()
-    conn.close()
-
-    result = {}
-    for article, qty in rows:
-        if article not in result:
-            result[article] = qty
-
-    return result
 
 
 # ================= LIST =================
@@ -193,33 +160,28 @@ async def load_last_inventory(user_id: int):
 @dp.message(F.text == "📊 Инвентаризации")
 async def list_inventories(message: Message):
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
         SELECT DISTINCT filename
         FROM inventory
-        WHERE user_id = ?
-        ORDER BY id DESC
+        WHERE user_id = %s
+        ORDER BY filename DESC
     """, (message.from_user.id,))
 
     rows = cur.fetchall()
+    cur.close()
     conn.close()
 
     if not rows:
         await message.answer("Нет сохранённых инвентаризаций.")
         return
 
-    buttons = []
-
-    for row in rows:
-        filename = row[0]
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"📁 {filename}",
-                callback_data=f"export::{filename}"
-            )
-        ])
+    buttons = [
+        [InlineKeyboardButton(text=f"📁 {row[0]}", callback_data=f"export::{row[0]}")]
+        for row in rows
+    ]
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -233,16 +195,17 @@ async def export_inventory(callback: CallbackQuery):
 
     filename = callback.data.split("::")[1]
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_conn()
     cur = conn.cursor()
 
     cur.execute("""
         SELECT article, name, group_name, qty
         FROM inventory
-        WHERE filename = ? AND user_id = ?
+        WHERE filename = %s AND user_id = %s
     """, (filename, callback.from_user.id))
 
     rows = cur.fetchall()
+    cur.close()
     conn.close()
 
     if not rows:
@@ -256,30 +219,36 @@ async def export_inventory(callback: CallbackQuery):
         "Количество"
     ])
 
-    excel_path = os.path.join(
-        INVENTORY_FOLDER,
-        f"{filename}.xlsx"
-    )
-
-    df.to_excel(excel_path, index=False)
+    file_path = f"/tmp/{filename}.xlsx"
+    df.to_excel(file_path, index=False)
 
     await callback.message.answer_document(
-        FSInputFile(excel_path),
+        FSInputFile(file_path),
         caption=f"Инвентаризация: {filename}"
     )
 
     await callback.answer()
 
 
-# ================= STATIC =================
+# ================= WEBHOOK =================
 
-app.mount("/data", StaticFiles(directory="data"), name="data")
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+@app.post("/webhook")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
+    return {"ok": True}
 
 
 @app.on_event("startup")
 async def on_startup():
-    asyncio.create_task(dp.start_polling(bot))
+    await bot.set_webhook(f"{BASE_WEB_URL}/webhook")
+
+
+# ================= STATIC =================
+
+app.mount("/data", StaticFiles(directory="data"), name="data")
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
 if __name__ == "__main__":
