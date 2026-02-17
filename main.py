@@ -1,6 +1,6 @@
 ﻿import os
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, date
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
@@ -14,7 +14,6 @@ from aiogram.types import (
     Update
 )
 from aiogram.filters import CommandStart
-from aiogram.types.web_app_info import WebAppInfo
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -27,11 +26,8 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 BASE_WEB_URL = "https://inventory-bot-muyu.onrender.com"
 
-if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не установлен")
+ADMIN_IDS = [502438855]  # <-- ВСТАВЬ СВОЙ TELEGRAM ID
 
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL не установлен")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -69,51 +65,26 @@ def init_db():
 init_db()
 
 
-# ================= TELEGRAM =================
+# ================= START =================
 
 @dp.message(CommandStart())
 async def start(message: Message):
 
     uid = message.from_user.id
 
+    buttons = [
+        [KeyboardButton(text="📊 Инвентаризации")]
+    ]
+
+    if uid in ADMIN_IDS:
+        buttons.append([KeyboardButton(text="👑 Админ панель")])
+
     keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(
-                    text="🛒 Магазин",
-                    web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=shop&uid={uid}"
-                    )
-                ),
-                KeyboardButton(
-                    text="🍳 Кухня",
-                    web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=kitchen&uid={uid}"
-                    )
-                ),
-            ],
-            [
-                KeyboardButton(
-                    text="🍸 Бар",
-                    web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=bar&uid={uid}"
-                    )
-                ),
-                KeyboardButton(
-                    text="❄ Морозилка",
-                    web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=freezer&uid={uid}"
-                    )
-                ),
-            ],
-            [
-                KeyboardButton(text="📊 Инвентаризации")
-            ]
-        ],
+        keyboard=buttons,
         resize_keyboard=True
     )
 
-    await message.answer("Выберите раздел:", reply_markup=keyboard)
+    await message.answer("Главное меню:", reply_markup=keyboard)
 
 
 # ================= SAVE =================
@@ -126,9 +97,6 @@ async def save_inventory(request: Request):
     user_id = data.get("user_id")
     filename = data.get("filename")
     items = data.get("items", [])
-
-    if not user_id or not filename or not items:
-        return JSONResponse(status_code=400, content={"error": "Неверные данные"})
 
     conn = get_conn()
     cur = conn.cursor()
@@ -152,7 +120,7 @@ async def save_inventory(request: Request):
     cur.close()
     conn.close()
 
-    return {"count": len(items)}
+    return {"ok": True}
 
 
 # ================= LIST =================
@@ -163,12 +131,19 @@ async def list_inventories(message: Message):
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT DISTINCT filename
-        FROM inventory
-        WHERE user_id = %s
-        ORDER BY filename DESC
-    """, (message.from_user.id,))
+    if message.from_user.id in ADMIN_IDS:
+        cur.execute("""
+            SELECT DISTINCT filename
+            FROM inventory
+            ORDER BY filename DESC
+        """)
+    else:
+        cur.execute("""
+            SELECT DISTINCT filename
+            FROM inventory
+            WHERE user_id = %s
+            ORDER BY filename DESC
+        """, (message.from_user.id,))
 
     rows = cur.fetchall()
     cur.close()
@@ -184,7 +159,6 @@ async def list_inventories(message: Message):
     ]
 
     keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-
     await message.answer("Выберите инвентаризацию:", reply_markup=keyboard)
 
 
@@ -198,18 +172,25 @@ async def export_inventory(callback: CallbackQuery):
     conn = get_conn()
     cur = conn.cursor()
 
-    cur.execute("""
-        SELECT article, name, group_name, qty
-        FROM inventory
-        WHERE filename = %s AND user_id = %s
-    """, (filename, callback.from_user.id))
+    if callback.from_user.id in ADMIN_IDS:
+        cur.execute("""
+            SELECT article, name, group_name, qty
+            FROM inventory
+            WHERE filename = %s
+        """, (filename,))
+    else:
+        cur.execute("""
+            SELECT article, name, group_name, qty
+            FROM inventory
+            WHERE filename = %s AND user_id = %s
+        """, (filename, callback.from_user.id))
 
     rows = cur.fetchall()
     cur.close()
     conn.close()
 
     if not rows:
-        await callback.answer("Данные не найдены", show_alert=True)
+        await callback.answer("Нет доступа", show_alert=True)
         return
 
     df = pd.DataFrame(rows, columns=[
@@ -230,6 +211,114 @@ async def export_inventory(callback: CallbackQuery):
     await callback.answer()
 
 
+# ================= ADMIN PANEL =================
+
+@dp.message(F.text == "👑 Админ панель")
+async def admin_panel(message: Message):
+
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🗑 Удалить инвентаризацию", callback_data="admin_delete")],
+        [InlineKeyboardButton(text="📅 Фильтр по дате", callback_data="admin_filter")]
+    ])
+
+    await message.answer("Админ панель:", reply_markup=keyboard)
+
+
+# ================= DELETE =================
+
+@dp.callback_query(F.data == "admin_delete")
+async def admin_delete_list(callback: CallbackQuery):
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT filename
+        FROM inventory
+        ORDER BY filename DESC
+    """)
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    buttons = [
+        [InlineKeyboardButton(text=row[0], callback_data=f"delete::{row[0]}")]
+        for row in rows
+    ]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    await callback.message.answer("Выберите файл для удаления:", reply_markup=keyboard)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("delete::"))
+async def delete_inventory(callback: CallbackQuery):
+
+    filename = callback.data.split("::")[1]
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("DELETE FROM inventory WHERE filename = %s", (filename,))
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    await callback.message.answer(f"Инвентаризация {filename} удалена.")
+    await callback.answer()
+
+
+# ================= FILTER =================
+
+@dp.callback_query(F.data == "admin_filter")
+async def admin_filter(callback: CallbackQuery):
+    await callback.message.answer("Введите дату в формате YYYY-MM-DD")
+    await callback.answer()
+
+
+@dp.message()
+async def filter_by_date(message: Message):
+
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    try:
+        filter_date = datetime.strptime(message.text, "%Y-%m-%d").date()
+    except:
+        return
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DISTINCT filename
+        FROM inventory
+        WHERE DATE(created_at) = %s
+    """, (filter_date,))
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    if not rows:
+        await message.answer("За эту дату нет инвентаризаций.")
+        return
+
+    buttons = [
+        [InlineKeyboardButton(text=row[0], callback_data=f"export::{row[0]}")]
+        for row in rows
+    ]
+
+    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer("Инвентаризации за дату:", reply_markup=keyboard)
+
+
 # ================= WEBHOOK =================
 
 @app.post("/webhook")
@@ -245,9 +334,6 @@ async def on_startup():
     await bot.set_webhook(f"{BASE_WEB_URL}/webhook")
 
 
-# ================= STATIC =================
-
-app.mount("/data", StaticFiles(directory="data"), name="data")
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
