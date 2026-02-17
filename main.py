@@ -2,8 +2,6 @@
 import sqlite3
 import pandas as pd
 import asyncio
-import logging
-import threading
 from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
@@ -25,20 +23,11 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 
-# ==========================
-# CONFIG
-# ==========================
-
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен")
 
 BASE_WEB_URL = "https://inventory-bot-muyu.onrender.com"
-
-
-# ==========================
-# PATHS
-# ==========================
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.path.join(BASE_DIR, "inventory.db")
@@ -46,16 +35,9 @@ INVENTORY_FOLDER = os.path.join(BASE_DIR, "inventories")
 
 os.makedirs(INVENTORY_FOLDER, exist_ok=True)
 
-
-# ==========================
-# INIT
-# ==========================
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = FastAPI()
-
-logging.basicConfig(level=logging.INFO)
 
 
 def init_db():
@@ -68,6 +50,7 @@ def init_db():
             user_id INTEGER,
             filename TEXT,
             article TEXT,
+            name TEXT,
             group_name TEXT,
             qty REAL,
             created_at TEXT
@@ -81,9 +64,7 @@ def init_db():
 init_db()
 
 
-# ==========================
-# TELEGRAM START
-# ==========================
+# ================= TELEGRAM =================
 
 @dp.message(CommandStart())
 async def start(message: Message):
@@ -130,9 +111,7 @@ async def start(message: Message):
     await message.answer("Выберите раздел:", reply_markup=keyboard)
 
 
-# ==========================
-# SAVE INVENTORY
-# ==========================
+# ================= SAVE =================
 
 @app.post("/save_inventory")
 async def save_inventory(request: Request):
@@ -149,25 +128,29 @@ async def save_inventory(request: Request):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
+    created_at = datetime.now().isoformat()
+
     for item in items:
         cur.execute("""
             INSERT INTO inventory
-            (user_id, filename, article, group_name, qty, created_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            (user_id, filename, article, name, group_name, qty, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
             user_id,
             filename,
             item["article"],
+            item["name"],
             item["group"],
             item["qty"],
-            datetime.now().isoformat()
+            created_at
         ))
 
     conn.commit()
     conn.close()
 
-    # создаём Excel
     df = pd.DataFrame(items)
+    df = df[["article", "name", "group", "qty"]]
+    df.columns = ["Артикул", "Наименование", "Группа", "Количество"]
 
     excel_path = os.path.join(
         INVENTORY_FOLDER,
@@ -179,9 +162,33 @@ async def save_inventory(request: Request):
     return {"count": len(items)}
 
 
-# ==========================
-# LIST INVENTORIES
-# ==========================
+# ================= LOAD LAST =================
+
+@app.get("/load_last_inventory")
+async def load_last_inventory(user_id: int):
+
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT article, qty
+        FROM inventory
+        WHERE user_id = ?
+        ORDER BY id DESC
+    """, (user_id,))
+
+    rows = cur.fetchall()
+    conn.close()
+
+    result = {}
+    for article, qty in rows:
+        if article not in result:
+            result[article] = qty
+
+    return result
+
+
+# ================= LIST =================
 
 @dp.message(F.text == "📊 Инвентаризации")
 async def list_inventories(message: Message):
@@ -219,9 +226,7 @@ async def list_inventories(message: Message):
     await message.answer("Выберите инвентаризацию:", reply_markup=keyboard)
 
 
-# ==========================
-# EXPORT
-# ==========================
+# ================= EXPORT =================
 
 @dp.callback_query(F.data.startswith("export::"))
 async def export_inventory(callback: CallbackQuery):
@@ -232,7 +237,7 @@ async def export_inventory(callback: CallbackQuery):
     cur = conn.cursor()
 
     cur.execute("""
-        SELECT article, group_name, qty
+        SELECT article, name, group_name, qty
         FROM inventory
         WHERE filename = ? AND user_id = ?
     """, (filename, callback.from_user.id))
@@ -244,7 +249,12 @@ async def export_inventory(callback: CallbackQuery):
         await callback.answer("Данные не найдены", show_alert=True)
         return
 
-    df = pd.DataFrame(rows, columns=["Артикул", "Группа", "Количество"])
+    df = pd.DataFrame(rows, columns=[
+        "Артикул",
+        "Наименование",
+        "Группа",
+        "Количество"
+    ])
 
     excel_path = os.path.join(
         INVENTORY_FOLDER,
@@ -261,21 +271,16 @@ async def export_inventory(callback: CallbackQuery):
     await callback.answer()
 
 
-# ==========================
-# STATIC
-# ==========================
+# ================= STATIC =================
 
 app.mount("/data", StaticFiles(directory="data"), name="data")
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
-# ==========================
-# START
-# ==========================
-
 @app.on_event("startup")
 async def on_startup():
     asyncio.create_task(dp.start_polling(bot))
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))

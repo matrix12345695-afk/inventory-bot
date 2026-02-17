@@ -11,94 +11,26 @@ content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no"
 <style>
 body {
     margin: 0;
-    font-family: Arial, sans-serif;
+    font-family: Arial;
     background: #0f0f0f;
     color: white;
 }
-
-.container {
-    padding: 14px;
-}
-
-.group {
-    background: #1b1b1b;
-    border-radius: 14px;
-    margin-bottom: 12px;
-    overflow: hidden;
-}
-
+.container { padding: 14px; }
+.group { background:#1b1b1b; border-radius:14px; margin-bottom:12px; }
 .group-header {
-    padding: 14px;
-    font-weight: bold;
-    background: #202020;
-    display: flex;
-    justify-content: space-between;
-    cursor: pointer;
+    padding:14px;
+    font-weight:bold;
+    background:#202020;
+    cursor:pointer;
 }
-
-.items {
-    display: none;
-    padding: 10px;
-}
-
-.item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-}
-
-.calc {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-}
-
-.calc input {
-    width: 55px;
-    background: #2b2b2b;
-    border: none;
-    color: white;
-    text-align: center;
-    border-radius: 6px;
-    padding: 6px;
-}
-
-.plus {
-    width: 30px;
-    height: 30px;
-    background: #2b2b2b;
-    border: none;
-    color: white;
-    border-radius: 8px;
-    font-size: 18px;
-}
-
-.footer {
-    position: sticky;
-    bottom: 0;
-    display: flex;
-    gap: 10px;
-    margin-top: 20px;
-}
-
-.save {
-    flex: 1;
-    padding: 14px;
-    background: #2e8b57;
-    border: none;
-    border-radius: 12px;
-    color: white;
-}
-
-.clear {
-    flex: 1;
-    padding: 14px;
-    background: #8b2e2e;
-    border: none;
-    border-radius: 12px;
-    color: white;
-}
+.items { display:none; padding:10px; }
+.item { display:flex; justify-content:space-between; margin-bottom:10px; }
+.calc { display:flex; gap:6px; }
+.calc input { width:60px; background:#2b2b2b; border:none; color:white; text-align:center; border-radius:6px; padding:6px; }
+.plus { background:#2b2b2b; border:none; color:white; border-radius:8px; width:30px; }
+.footer { display:flex; gap:10px; margin-top:20px; }
+.save { flex:1; padding:14px; background:#2e8b57; border:none; border-radius:12px; color:white; }
+.clear { flex:1; padding:14px; background:#8b2e2e; border:none; border-radius:12px; color:white; }
 </style>
 </head>
 
@@ -106,7 +38,6 @@ body {
 <div class="container">
 <h2 id="title"></h2>
 <div id="groups"></div>
-
 <div class="footer">
 <button class="save" onclick="saveInventory()">💾 Сохранить</button>
 <button class="clear" onclick="clearAll()">🗑 Очистить</button>
@@ -115,26 +46,32 @@ body {
 
 <script>
 
-let tg = null;
-
-if (window.Telegram && Telegram.WebApp) {
-    tg = Telegram.WebApp;
-    tg.ready();
-    tg.expand();
-    tg.disableVerticalSwipes();
-}
+let tg = Telegram.WebApp;
+tg.ready();
+tg.expand();
 
 const params = new URLSearchParams(window.location.search);
 const section = params.get("section") || "shop";
 const userId = params.get("uid");
 
 document.getElementById("title").textContent =
-    section.charAt(0).toUpperCase() + section.slice(1);
+section.charAt(0).toUpperCase() + section.slice(1);
 
 async function loadData() {
+
     const res = await fetch(`/data/${section}.json`);
     const data = await res.json();
+
     render(data);
+
+    const old = await fetch(`/load_last_inventory?user_id=${userId}`);
+    const oldData = await old.json();
+
+    document.querySelectorAll(".total").forEach(i => {
+        if (oldData[i.dataset.article]) {
+            i.value = oldData[i.dataset.article];
+        }
+    });
 }
 
 function render(data) {
@@ -149,14 +86,14 @@ function render(data) {
 
         const header = document.createElement("div");
         header.className = "group-header";
-        header.innerHTML = `<span>${group.group}</span><span>▼</span>`;
+        header.textContent = group.group;
 
         const items = document.createElement("div");
         items.className = "items";
 
         header.onclick = () => {
             items.style.display =
-                items.style.display === "block" ? "none" : "block";
+            items.style.display === "block" ? "none" : "block";
         };
 
         group.items.forEach(item => {
@@ -180,13 +117,16 @@ function render(data) {
             const total = document.createElement("input");
             total.type = "number";
             total.value = "0";
+            total.className = "total";
+
             total.dataset.article = item.article;
             total.dataset.group = group.group;
+            total.dataset.name = item.name;
 
             plus.onclick = () => {
                 total.value =
-                    parseFloat(total.value || 0) +
-                    parseFloat(input.value || 0);
+                parseFloat(total.value || 0) +
+                parseFloat(input.value || 0);
                 input.value = "";
             };
 
@@ -207,8 +147,8 @@ function render(data) {
 }
 
 function clearAll() {
-    document.querySelectorAll(".calc input:last-child")
-        .forEach(i => i.value = "0");
+    document.querySelectorAll(".total")
+    .forEach(i => i.value = "0");
 }
 
 async function saveInventory() {
@@ -216,13 +156,14 @@ async function saveInventory() {
     const filename = prompt("Введите название инвентаризации:");
     if (!filename) return;
 
-    const totals = document.querySelectorAll(".calc input:last-child");
+    const totals = document.querySelectorAll(".total");
     const items = [];
 
     totals.forEach(t => {
         if (parseFloat(t.value) > 0) {
             items.push({
                 article: t.dataset.article,
+                name: t.dataset.name,
                 group: t.dataset.group,
                 qty: parseFloat(t.value)
             });
@@ -245,10 +186,10 @@ async function saveInventory() {
     });
 
     alert("Сохранено");
-    clearAll();
 }
 
 loadData();
+
 </script>
 </body>
 </html>
