@@ -1,35 +1,31 @@
 ﻿import os
-import pandas as pd
+import logging
 from datetime import datetime
+from io import BytesIO
 
+import psycopg2
+from fastapi import FastAPI, Request
+from fastapi.staticfiles import StaticFiles
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message,
-    FSInputFile,
     ReplyKeyboardMarkup,
     KeyboardButton,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-    CallbackQuery,
-    Update
+    WebAppInfo,
+    InputFile
 )
-from aiogram.types.web_app_info import WebAppInfo
 from aiogram.filters import CommandStart
+from aiogram.types import Update
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from fastapi.staticfiles import StaticFiles
-import psycopg2
-import uvicorn
+from openpyxl import Workbook
 
-
-# ================= ENV =================
+# ================= CONFIG =================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
-BASE_WEB_URL = "https://inventory-bot-muyu.onrender.com"
+BASE_WEB_URL = os.getenv("BASE_WEB_URL")
 
-ADMIN_IDS = [502438855]
+ADMIN_IDS = [502438855]  # <-- твой Telegram ID
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен")
@@ -37,155 +33,164 @@ if not BOT_TOKEN:
 if not DATABASE_URL:
     raise ValueError("DATABASE_URL не установлен")
 
+if not BASE_WEB_URL:
+    raise ValueError("BASE_WEB_URL не установлен")
 
 # ================= INIT =================
+
+logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 app = FastAPI()
 
+# ================= STATIC =================
 
-# ================= DATABASE =================
+app.mount("/data", StaticFiles(directory="data"), name="data")
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+# ================= DB =================
 
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
-
-
-def init_db():
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS inventory (
-            id SERIAL PRIMARY KEY,
-            user_id BIGINT,
-            filename TEXT,
-            article TEXT,
-            name TEXT,
-            group_name TEXT,
-            qty NUMERIC,
-            created_at TIMESTAMP
-        );
-    """)
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-
-init_db()
-
 
 # ================= START =================
 
 @dp.message(CommandStart())
 async def start(message: Message):
-
     uid = message.from_user.id
 
-    buttons = [
-        [
-            KeyboardButton(
-                text="🛒 Магазин",
-                web_app=WebAppInfo(
-                    url=f"{BASE_WEB_URL}/?section=shop&uid={uid}"
-                )
-            ),
-            KeyboardButton(
-                text="🍳 Кухня",
-                web_app=WebAppInfo(
-                    url=f"{BASE_WEB_URL}/?section=kitchen&uid={uid}"
-                )
-            ),
-        ],
-        [
-            KeyboardButton(
-                text="🍸 Бар",
-                web_app=WebAppInfo(
-                    url=f"{BASE_WEB_URL}/?section=bar&uid={uid}"
-                )
-            ),
-            KeyboardButton(
-                text="❄ Морозилка",
-                web_app=WebAppInfo(
-                    url=f"{BASE_WEB_URL}/?section=freezer&uid={uid}"
-                )
-            ),
-        ],
-        [KeyboardButton(text="📊 Инвентаризации")]
-    ]
-
-    if uid in ADMIN_IDS:
-        buttons.append([KeyboardButton(text="👑 Админ панель")])
-
     keyboard = ReplyKeyboardMarkup(
-        keyboard=buttons,
+        keyboard=[
+            [
+                KeyboardButton(
+                    text="🛒 Магазин",
+                    web_app=WebAppInfo(
+                        url=f"{BASE_WEB_URL}/?section=shop&uid={uid}"
+                    )
+                ),
+                KeyboardButton(
+                    text="🍳 Кухня",
+                    web_app=WebAppInfo(
+                        url=f"{BASE_WEB_URL}/?section=kitchen&uid={uid}"
+                    )
+                ),
+            ],
+            [
+                KeyboardButton(
+                    text="🍸 Бар",
+                    web_app=WebAppInfo(
+                        url=f"{BASE_WEB_URL}/?section=bar&uid={uid}"
+                    )
+                ),
+                KeyboardButton(
+                    text="❄ Морозилка",
+                    web_app=WebAppInfo(
+                        url=f"{BASE_WEB_URL}/?section=freezer&uid={uid}"
+                    )
+                ),
+            ],
+            [
+                KeyboardButton(text="📊 Инвентаризации")
+            ]
+        ],
         resize_keyboard=True
     )
 
-    await message.answer("Главное меню:", reply_markup=keyboard)
+    if uid in ADMIN_IDS:
+        keyboard.keyboard.append(
+            [KeyboardButton(text="🛠 Админ панель")]
+        )
 
+    await message.answer("Выберите раздел:", reply_markup=keyboard)
 
-# ================= SAVE =================
+# ================= SAVE INVENTORY =================
 
 @app.post("/save_inventory")
 async def save_inventory(request: Request):
-
     data = await request.json()
 
-    user_id = data.get("user_id")
-    filename = data.get("filename")
-    items = data.get("items", [])
-
-    if not user_id or not filename or not items:
-        return JSONResponse(status_code=400, content={"error": "Invalid data"})
+    user_id = data["user_id"]
+    name = data["name"]
+    items = data["items"]
 
     conn = get_conn()
     cur = conn.cursor()
 
+    now = datetime.now()
+
     for item in items:
-        cur.execute("""
-            INSERT INTO inventory
-            (user_id, filename, article, name, group_name, qty, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """, (
-            user_id,
-            filename,
-            item.get("article"),
-            item.get("name"),
-            item.get("group"),
-            item.get("qty"),
-            datetime.now()
-        ))
+        if float(item["qty"]) > 0:
+            cur.execute("""
+                INSERT INTO inventory
+                (user_id, name, article, group_name, qty, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (
+                user_id,
+                name,
+                item["article"],
+                item["group"],
+                item["qty"],
+                now
+            ))
 
     conn.commit()
     cur.close()
     conn.close()
 
-    return {"ok": True}
+    return {"status": "ok"}
 
+# ================= LOAD LAST INVENTORY =================
 
-# ================= LIST =================
-
-@dp.message(F.text == "📊 Инвентаризации")
-async def list_inventories(message: Message):
+@app.get("/load_last_inventory")
+async def load_last_inventory(user_id: int):
 
     conn = get_conn()
     cur = conn.cursor()
 
-    if message.from_user.id in ADMIN_IDS:
-        cur.execute("""
-            SELECT DISTINCT filename
+    cur.execute("""
+        SELECT article, qty
+        FROM inventory
+        WHERE user_id = %s
+        AND created_at = (
+            SELECT MAX(created_at)
             FROM inventory
-            ORDER BY filename DESC
+            WHERE user_id = %s
+        )
+    """, (user_id, user_id))
+
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+
+    result = {}
+    for article, qty in rows:
+        result[str(article)] = float(qty)
+
+    return result
+
+# ================= LIST INVENTORIES =================
+
+@dp.message(F.text == "📊 Инвентаризации")
+async def list_inventories(message: Message):
+    user_id = message.from_user.id
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    if user_id in ADMIN_IDS:
+        cur.execute("""
+            SELECT DISTINCT name
+            FROM inventory
+            ORDER BY name DESC
         """)
     else:
         cur.execute("""
-            SELECT DISTINCT filename
+            SELECT DISTINCT name
             FROM inventory
             WHERE user_id = %s
-            ORDER BY filename DESC
-        """, (message.from_user.id,))
+            ORDER BY name DESC
+        """, (user_id,))
 
     rows = cur.fetchall()
     cur.close()
@@ -195,98 +200,75 @@ async def list_inventories(message: Message):
         await message.answer("Нет сохранённых инвентаризаций.")
         return
 
-    buttons = [
-        [InlineKeyboardButton(text=f"📁 {row[0]}", callback_data=f"export::{row[0]}")]
-        for row in rows
-    ]
+    for row in rows:
+        await message.answer(f"📁 {row[0]}")
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("Выберите инвентаризацию:", reply_markup=keyboard)
+# ================= EXPORT TO EXCEL =================
 
-
-# ================= EXPORT =================
-
-@dp.callback_query(F.data.startswith("export::"))
-async def export_inventory(callback: CallbackQuery):
-
-    filename = callback.data.split("::")[1]
+@dp.message(F.text.startswith("📁 "))
+async def export_inventory(message: Message):
+    name = message.text.replace("📁 ", "")
+    user_id = message.from_user.id
 
     conn = get_conn()
     cur = conn.cursor()
 
-    if callback.from_user.id in ADMIN_IDS:
+    if user_id in ADMIN_IDS:
         cur.execute("""
-            SELECT article, name, group_name, qty
+            SELECT article, group_name, qty
             FROM inventory
-            WHERE filename = %s
-        """, (filename,))
+            WHERE name = %s
+        """, (name,))
     else:
         cur.execute("""
-            SELECT article, name, group_name, qty
+            SELECT article, group_name, qty
             FROM inventory
-            WHERE filename = %s AND user_id = %s
-        """, (filename, callback.from_user.id))
+            WHERE name = %s AND user_id = %s
+        """, (name, user_id))
 
     rows = cur.fetchall()
     cur.close()
     conn.close()
 
-    if not rows:
-        await callback.answer("Нет доступа", show_alert=True)
-        return
+    wb = Workbook()
+    ws = wb.active
+    ws.append(["Артикул", "Группа", "Количество"])
 
-    df = pd.DataFrame(rows, columns=[
-        "Артикул",
-        "Наименование",
-        "Группа",
-        "Количество"
-    ])
+    for row in rows:
+        ws.append(row)
 
-    file_path = f"/tmp/{filename}.xlsx"
-    df.to_excel(file_path, index=False)
+    file_stream = BytesIO()
+    wb.save(file_stream)
+    file_stream.seek(0)
 
-    await callback.message.answer_document(
-        FSInputFile(file_path),
-        caption=f"Инвентаризация: {filename}"
+    await message.answer_document(
+        InputFile(file_stream, filename=f"{name}.xlsx")
     )
-
-    await callback.answer()
-
 
 # ================= ADMIN PANEL =================
 
-@dp.message(F.text == "👑 Админ панель")
+@dp.message(F.text == "🛠 Админ панель")
 async def admin_panel(message: Message):
-
     if message.from_user.id not in ADMIN_IDS:
         return
 
-    keyboard = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🗑 Удалить инвентаризацию", callback_data="admin_delete")],
-        [InlineKeyboardButton(text="📅 Фильтр по дате", callback_data="admin_filter")]
-    ])
-
-    await message.answer("Админ панель:", reply_markup=keyboard)
-
+    await message.answer("Админ панель активна.")
 
 # ================= WEBHOOK =================
 
 @app.post("/webhook")
 async def telegram_webhook(request: Request):
-    data = await request.json()
-    update = Update.model_validate(data)
+    update = Update.model_validate(await request.json())
     await dp.feed_update(bot, update)
     return {"ok": True}
 
+# ================= STARTUP =================
 
 @app.on_event("startup")
 async def on_startup():
     await bot.set_webhook(f"{BASE_WEB_URL}/webhook")
+    logging.info("Webhook установлен")
 
-
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+@app.on_event("shutdown")
+async def on_shutdown():
+    await bot.delete_webhook()
