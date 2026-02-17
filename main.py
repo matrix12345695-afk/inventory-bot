@@ -1,6 +1,6 @@
 ﻿import os
 import pandas as pd
-from datetime import datetime, date
+from datetime import datetime
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
@@ -13,6 +13,7 @@ from aiogram.types import (
     CallbackQuery,
     Update
 )
+from aiogram.types.web_app_info import WebAppInfo
 from aiogram.filters import CommandStart
 
 from fastapi import FastAPI, Request
@@ -22,12 +23,22 @@ import psycopg2
 import uvicorn
 
 
+# ================= ENV =================
+
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 BASE_WEB_URL = "https://inventory-bot-muyu.onrender.com"
 
-ADMIN_IDS = [502438855]  # <-- ВСТАВЬ СВОЙ TELEGRAM ID
+ADMIN_IDS = [502438855]
 
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не установлен")
+
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL не установлен")
+
+
+# ================= INIT =================
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -101,12 +112,9 @@ async def start(message: Message):
                 )
             ),
         ],
-        [
-            KeyboardButton(text="📊 Инвентаризации")
-        ]
+        [KeyboardButton(text="📊 Инвентаризации")]
     ]
 
-    # 👑 Кнопка админа
     if uid in ADMIN_IDS:
         buttons.append([KeyboardButton(text="👑 Админ панель")])
 
@@ -116,7 +124,6 @@ async def start(message: Message):
     )
 
     await message.answer("Главное меню:", reply_markup=keyboard)
-
 
 
 # ================= SAVE =================
@@ -130,6 +137,9 @@ async def save_inventory(request: Request):
     filename = data.get("filename")
     items = data.get("items", [])
 
+    if not user_id or not filename or not items:
+        return JSONResponse(status_code=400, content={"error": "Invalid data"})
+
     conn = get_conn()
     cur = conn.cursor()
 
@@ -141,10 +151,10 @@ async def save_inventory(request: Request):
         """, (
             user_id,
             filename,
-            item["article"],
-            item["name"],
-            item["group"],
-            item["qty"],
+            item.get("article"),
+            item.get("name"),
+            item.get("group"),
+            item.get("qty"),
             datetime.now()
         ))
 
@@ -257,98 +267,6 @@ async def admin_panel(message: Message):
     ])
 
     await message.answer("Админ панель:", reply_markup=keyboard)
-
-
-# ================= DELETE =================
-
-@dp.callback_query(F.data == "admin_delete")
-async def admin_delete_list(callback: CallbackQuery):
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT DISTINCT filename
-        FROM inventory
-        ORDER BY filename DESC
-    """)
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    buttons = [
-        [InlineKeyboardButton(text=row[0], callback_data=f"delete::{row[0]}")]
-        for row in rows
-    ]
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-
-    await callback.message.answer("Выберите файл для удаления:", reply_markup=keyboard)
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("delete::"))
-async def delete_inventory(callback: CallbackQuery):
-
-    filename = callback.data.split("::")[1]
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("DELETE FROM inventory WHERE filename = %s", (filename,))
-    conn.commit()
-
-    cur.close()
-    conn.close()
-
-    await callback.message.answer(f"Инвентаризация {filename} удалена.")
-    await callback.answer()
-
-
-# ================= FILTER =================
-
-@dp.callback_query(F.data == "admin_filter")
-async def admin_filter(callback: CallbackQuery):
-    await callback.message.answer("Введите дату в формате YYYY-MM-DD")
-    await callback.answer()
-
-
-@dp.message()
-async def filter_by_date(message: Message):
-
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    try:
-        filter_date = datetime.strptime(message.text, "%Y-%m-%d").date()
-    except:
-        return
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT DISTINCT filename
-        FROM inventory
-        WHERE DATE(created_at) = %s
-    """, (filter_date,))
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    if not rows:
-        await message.answer("За эту дату нет инвентаризаций.")
-        return
-
-    buttons = [
-        [InlineKeyboardButton(text=row[0], callback_data=f"export::{row[0]}")]
-        for row in rows
-    ]
-
-    keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer("Инвентаризации за дату:", reply_markup=keyboard)
 
 
 # ================= WEBHOOK =================
