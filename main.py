@@ -12,12 +12,12 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     WebAppInfo,
-    InputFile
+    InputFile,
+    Update
 )
 from aiogram.filters import CommandStart
-from aiogram.types import Update
-
 from openpyxl import Workbook
+import uvicorn
 
 # ================= CONFIG =================
 
@@ -25,7 +25,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 BASE_WEB_URL = os.getenv("BASE_WEB_URL")
 
-ADMIN_IDS = [502438855]  # <-- твой Telegram ID
+ADMIN_IDS = [502438855]
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN не установлен")
@@ -90,17 +90,13 @@ async def start(message: Message):
                     )
                 ),
             ],
-            [
-                KeyboardButton(text="📊 Инвентаризации")
-            ]
+            [KeyboardButton(text="📊 Инвентаризации")]
         ],
         resize_keyboard=True
     )
 
     if uid in ADMIN_IDS:
-        keyboard.keyboard.append(
-            [KeyboardButton(text="🛠 Админ панель")]
-        )
+        keyboard.keyboard.append([KeyboardButton(text="🛠 Админ панель")])
 
     await message.answer("Выберите раздел:", reply_markup=keyboard)
 
@@ -111,7 +107,7 @@ async def save_inventory(request: Request):
     data = await request.json()
 
     user_id = data["user_id"]
-    name = data["name"]
+    name = data["filename"]   # ← исправлено
     items = data["items"]
 
     conn = get_conn()
@@ -120,19 +116,18 @@ async def save_inventory(request: Request):
     now = datetime.now()
 
     for item in items:
-        if float(item["qty"]) > 0:
-            cur.execute("""
-                INSERT INTO inventory
-                (user_id, name, article, group_name, qty, created_at)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            """, (
-                user_id,
-                name,
-                item["article"],
-                item["group"],
-                item["qty"],
-                now
-            ))
+        cur.execute("""
+            INSERT INTO inventory
+            (user_id, name, article, group_name, qty, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            user_id,
+            name,
+            item["article"],
+            item["group"],
+            item["qty"],
+            now
+        ))
 
     conn.commit()
     cur.close()
@@ -179,18 +174,12 @@ async def list_inventories(message: Message):
     cur = conn.cursor()
 
     if user_id in ADMIN_IDS:
-        cur.execute("""
-            SELECT DISTINCT name
-            FROM inventory
-            ORDER BY name DESC
-        """)
+        cur.execute("SELECT DISTINCT name FROM inventory ORDER BY name DESC")
     else:
-        cur.execute("""
-            SELECT DISTINCT name
-            FROM inventory
-            WHERE user_id = %s
-            ORDER BY name DESC
-        """, (user_id,))
+        cur.execute(
+            "SELECT DISTINCT name FROM inventory WHERE user_id = %s ORDER BY name DESC",
+            (user_id,)
+        )
 
     rows = cur.fetchall()
     cur.close()
@@ -203,7 +192,7 @@ async def list_inventories(message: Message):
     for row in rows:
         await message.answer(f"📁 {row[0]}")
 
-# ================= EXPORT TO EXCEL =================
+# ================= EXPORT =================
 
 @dp.message(F.text.startswith("📁 "))
 async def export_inventory(message: Message):
@@ -214,17 +203,12 @@ async def export_inventory(message: Message):
     cur = conn.cursor()
 
     if user_id in ADMIN_IDS:
-        cur.execute("""
-            SELECT article, group_name, qty
-            FROM inventory
-            WHERE name = %s
-        """, (name,))
+        cur.execute("SELECT article, group_name, qty FROM inventory WHERE name = %s", (name,))
     else:
-        cur.execute("""
-            SELECT article, group_name, qty
-            FROM inventory
-            WHERE name = %s AND user_id = %s
-        """, (name, user_id))
+        cur.execute(
+            "SELECT article, group_name, qty FROM inventory WHERE name = %s AND user_id = %s",
+            (name, user_id)
+        )
 
     rows = cur.fetchall()
     cur.close()
@@ -251,7 +235,6 @@ async def export_inventory(message: Message):
 async def admin_panel(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
-
     await message.answer("Админ панель активна.")
 
 # ================= WEBHOOK =================
@@ -262,13 +245,16 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-# ================= STARTUP =================
-
 @app.on_event("startup")
-async def on_startup():
+async def startup():
     await bot.set_webhook(f"{BASE_WEB_URL}/webhook")
-    logging.info("Webhook установлен")
 
 @app.on_event("shutdown")
-async def on_shutdown():
+async def shutdown():
     await bot.delete_webhook()
+
+# ================= RUN =================
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
