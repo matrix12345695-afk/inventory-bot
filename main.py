@@ -15,9 +15,9 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
     KeyboardButton,
     WebAppInfo,
-    InputFile,
     Update
 )
+from aiogram.types.input_file import BufferedInputFile
 from aiogram.filters import CommandStart
 from openpyxl import Workbook
 
@@ -105,7 +105,6 @@ def main_menu(uid):
 async def start(message: Message):
     await message.answer("Главное меню:", reply_markup=main_menu(message.from_user.id))
 
-
 # ================= SAVE INVENTORY =================
 
 @app.post("/save_inventory")
@@ -143,8 +142,7 @@ async def save_inventory(request: Request):
 
     return {"status": "ok"}
 
-
-# ================= LIST INVENTORIES BUTTONS =================
+# ================= LIST INVENTORIES =================
 
 @dp.message(F.text == "📊 Инвентаризации")
 async def list_inventories(message: Message):
@@ -177,7 +175,6 @@ async def list_inventories(message: Message):
         reply_markup=ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
     )
 
-
 # ================= EXPORT =================
 
 @dp.message(F.text.startswith("📁 "))
@@ -209,12 +206,11 @@ async def export_inventory(message: Message):
 
     file_stream = BytesIO()
     wb.save(file_stream)
-    file_stream.seek(0)
+    file_bytes = file_stream.getvalue()
 
     await message.answer_document(
-        InputFile(file_stream, filename=f"{name}.xlsx")
+        BufferedInputFile(file_bytes, filename=f"{name}.xlsx")
     )
-
 
 # ================= ADMIN PANEL =================
 
@@ -233,8 +229,7 @@ async def admin_panel(message: Message):
         reply_markup=ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
     )
 
-
-# ================= DELETE WITH BUTTONS =================
+# ================= DELETE =================
 
 @dp.message(F.text == "🗑 Удалить инвентаризацию")
 async def choose_delete_inventory(message: Message):
@@ -243,10 +238,8 @@ async def choose_delete_inventory(message: Message):
 
     conn = get_conn()
     cur = conn.cursor()
-
     cur.execute("SELECT DISTINCT name FROM inventory ORDER BY name DESC")
     rows = cur.fetchall()
-
     cur.close()
     conn.close()
 
@@ -262,7 +255,6 @@ async def choose_delete_inventory(message: Message):
         reply_markup=ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
     )
 
-
 @dp.message(F.text.startswith("❌ "))
 async def delete_inventory(message: Message):
     if message.from_user.id not in ADMIN_IDS:
@@ -272,15 +264,12 @@ async def delete_inventory(message: Message):
 
     conn = get_conn()
     cur = conn.cursor()
-
     cur.execute("DELETE FROM inventory WHERE name = %s", (name,))
     conn.commit()
-
     cur.close()
     conn.close()
 
     await message.answer(f"Инвентаризация '{name}' удалена.")
-
 
 # ================= BACK =================
 
@@ -291,7 +280,6 @@ async def back_to_menu(message: Message):
         reply_markup=main_menu(message.from_user.id)
     )
 
-
 # ================= WEBHOOK =================
 
 @app.post("/webhook")
@@ -300,14 +288,12 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
-
 # ================= STARTUP =================
 
 @app.on_event("startup")
 async def startup():
     await bot.set_webhook(f"{BASE_WEB_URL}/webhook")
     logging.info("Webhook установлен")
-
 
 # ================= RUN =================
 
