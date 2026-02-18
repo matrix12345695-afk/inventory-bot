@@ -100,7 +100,6 @@ def main_menu(uid):
 
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
-
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer("Главное меню:", reply_markup=main_menu(message.from_user.id))
@@ -125,14 +124,15 @@ async def save_inventory(request: Request):
     for item in items:
         cur.execute("""
             INSERT INTO inventory
-            (user_id, name, article, group_name, qty, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            (user_id, name, article, item_name, group_name, qty, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (
             user_id,
             name,
-            item["article"],
-            item["group"],
-            item["qty"],
+            item.get("article"),
+            item.get("name"),
+            item.get("group"),
+            item.get("qty"),
             now
         ))
 
@@ -186,12 +186,17 @@ async def export_inventory(message: Message):
     cur = conn.cursor()
 
     if user_id in ADMIN_IDS:
-        cur.execute("SELECT article, group_name, qty FROM inventory WHERE name = %s", (name,))
+        cur.execute("""
+            SELECT article, item_name, group_name, qty
+            FROM inventory
+            WHERE name = %s
+        """, (name,))
     else:
-        cur.execute(
-            "SELECT article, group_name, qty FROM inventory WHERE name = %s AND user_id = %s",
-            (name, user_id)
-        )
+        cur.execute("""
+            SELECT article, item_name, group_name, qty
+            FROM inventory
+            WHERE name = %s AND user_id = %s
+        """, (name, user_id))
 
     rows = cur.fetchall()
     cur.close()
@@ -199,7 +204,7 @@ async def export_inventory(message: Message):
 
     wb = Workbook()
     ws = wb.active
-    ws.append(["Артикул", "Группа", "Количество"])
+    ws.append(["Артикул", "Наименование", "Группа", "Количество"])
 
     for row in rows:
         ws.append(row)
