@@ -51,7 +51,6 @@ app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/data", StaticFiles(directory="data"), name="data")
 
-# Главная страница
 @app.get("/")
 async def index():
     return FileResponse("static/index.html")
@@ -63,49 +62,51 @@ def get_conn():
 
 # ================= START =================
 
-@dp.message(CommandStart())
-async def start(message: Message):
-    uid = message.from_user.id
-
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [
-                KeyboardButton(
-                    text="🛒 Магазин",
-                    web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=shop&uid={uid}"
-                    )
-                ),
-                KeyboardButton(
-                    text="🍳 Кухня",
-                    web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=kitchen&uid={uid}"
-                    )
-                ),
-            ],
-            [
-                KeyboardButton(
-                    text="🍸 Бар",
-                    web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=bar&uid={uid}"
-                    )
-                ),
-                KeyboardButton(
-                    text="❄ Морозилка",
-                    web_app=WebAppInfo(
-                        url=f"{BASE_WEB_URL}/?section=freezer&uid={uid}"
-                    )
-                ),
-            ],
-            [KeyboardButton(text="📊 Инвентаризации")]
+def main_menu(uid):
+    keyboard = [
+        [
+            KeyboardButton(
+                text="🛒 Магазин",
+                web_app=WebAppInfo(
+                    url=f"{BASE_WEB_URL}/?section=shop&uid={uid}"
+                )
+            ),
+            KeyboardButton(
+                text="🍳 Кухня",
+                web_app=WebAppInfo(
+                    url=f"{BASE_WEB_URL}/?section=kitchen&uid={uid}"
+                )
+            ),
         ],
-        resize_keyboard=True
-    )
+        [
+            KeyboardButton(
+                text="🍸 Бар",
+                web_app=WebAppInfo(
+                    url=f"{BASE_WEB_URL}/?section=bar&uid={uid}"
+                )
+            ),
+            KeyboardButton(
+                text="❄ Морозилка",
+                web_app=WebAppInfo(
+                    url=f"{BASE_WEB_URL}/?section=freezer&uid={uid}"
+                )
+            ),
+        ],
+        [KeyboardButton(text="📊 Инвентаризации")]
+    ]
 
     if uid in ADMIN_IDS:
-        keyboard.keyboard.append([KeyboardButton(text="🛠 Админ панель")])
+        keyboard.append([KeyboardButton(text="🛠 Админ панель")])
 
-    await message.answer("Выберите раздел:", reply_markup=keyboard)
+    return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
+
+@dp.message(CommandStart())
+async def start(message: Message):
+    await message.answer(
+        "Главное меню:",
+        reply_markup=main_menu(message.from_user.id)
+    )
 
 # ================= SAVE INVENTORY =================
 
@@ -122,7 +123,6 @@ async def save_inventory(request: Request):
 
     conn = get_conn()
     cur = conn.cursor()
-
     now = datetime.now()
 
     for item in items:
@@ -145,11 +145,10 @@ async def save_inventory(request: Request):
 
     return {"status": "ok"}
 
-# ================= LOAD LAST INVENTORY =================
+# ================= LOAD LAST =================
 
 @app.get("/load_last_inventory")
 async def load_last_inventory(user_id: int | None = None):
-
     if not user_id:
         return {}
 
@@ -173,7 +172,7 @@ async def load_last_inventory(user_id: int | None = None):
 
     return {str(a): float(q) for a, q in rows}
 
-# ================= LIST INVENTORIES =================
+# ================= LIST =================
 
 @dp.message(F.text == "📊 Инвентаризации")
 async def list_inventories(message: Message):
@@ -237,6 +236,74 @@ async def export_inventory(message: Message):
     await message.answer_document(
         InputFile(file_stream, filename=f"{name}.xlsx")
     )
+
+# ================= ADMIN PANEL =================
+
+@dp.message(F.text == "🛠 Админ панель")
+async def admin_panel(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🗑 Удалить инвентаризацию")],
+            [KeyboardButton(text="📅 Фильтр по дате")],
+            [KeyboardButton(text="🔙 Главное меню")]
+        ],
+        resize_keyboard=True
+    )
+
+    await message.answer("Админ панель:", reply_markup=keyboard)
+
+
+@dp.message(F.text == "🔙 Главное меню")
+async def back_to_menu(message: Message):
+    await message.answer(
+        "Главное меню:",
+        reply_markup=main_menu(message.from_user.id)
+    )
+
+# ================= DELETE INVENTORY =================
+
+@dp.message(F.text == "🗑 Удалить инвентаризацию")
+async def delete_inventory(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    await message.answer("Напишите точное название инвентаризации для удаления:")
+
+
+@dp.message()
+async def delete_by_name(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    name = message.text
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("DELETE FROM inventory WHERE name = %s", (name,))
+    deleted = cur.rowcount
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    if deleted:
+        await message.answer(f"Инвентаризация '{name}' удалена.")
+    else:
+        await message.answer("Ничего не найдено.")
+
+# ================= FILTER BY DATE =================
+
+@dp.message(F.text == "📅 Фильтр по дате")
+async def filter_by_date(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    await message.answer("Введите дату в формате YYYY-MM-DD:")
+
 
 # ================= WEBHOOK =================
 
