@@ -300,6 +300,29 @@ async def startup():
     await bot.set_webhook(f"{BASE_WEB_URL}/webhook")
     logging.info("Webhook установлен")
 
+    # Авто-проверка структуры таблицы
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1 
+                FROM information_schema.columns 
+                WHERE table_name='inventory' AND column_name='item_name'
+            ) THEN
+                ALTER TABLE inventory ADD COLUMN item_name TEXT;
+            END IF;
+        END$$;
+    """)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    logging.info("Проверка структуры inventory выполнена")
+
 # ================= RUN =================
 
 if __name__ == "__main__":
