@@ -60,7 +60,7 @@ async def index():
 def get_conn():
     return psycopg2.connect(DATABASE_URL)
 
-# ================= START =================
+# ================= MAIN MENU =================
 
 def main_menu(uid):
     keyboard = [
@@ -103,10 +103,8 @@ def main_menu(uid):
 
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer(
-        "Главное меню:",
-        reply_markup=main_menu(message.from_user.id)
-    )
+    await message.answer("Главное меню:", reply_markup=main_menu(message.from_user.id))
+
 
 # ================= SAVE INVENTORY =================
 
@@ -145,34 +143,8 @@ async def save_inventory(request: Request):
 
     return {"status": "ok"}
 
-# ================= LOAD LAST =================
 
-@app.get("/load_last_inventory")
-async def load_last_inventory(user_id: int | None = None):
-    if not user_id:
-        return {}
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("""
-        SELECT article, qty
-        FROM inventory
-        WHERE user_id = %s
-        AND created_at = (
-            SELECT MAX(created_at)
-            FROM inventory
-            WHERE user_id = %s
-        )
-    """, (user_id, user_id))
-
-    rows = cur.fetchall()
-    cur.close()
-    conn.close()
-
-    return {str(a): float(q) for a, q in rows}
-
-# ================= LIST =================
+# ================= LIST INVENTORIES BUTTONS =================
 
 @dp.message(F.text == "📊 Инвентаризации")
 async def list_inventories(message: Message):
@@ -197,8 +169,14 @@ async def list_inventories(message: Message):
         await message.answer("Нет сохранённых инвентаризаций.")
         return
 
-    for row in rows:
-        await message.answer(f"📁 {row[0]}")
+    buttons = [[KeyboardButton(text=f"📁 {row[0]}")] for row in rows]
+    buttons.append([KeyboardButton(text="🔙 Главное меню")])
+
+    await message.answer(
+        "Выберите инвентаризацию:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    )
+
 
 # ================= EXPORT =================
 
@@ -237,6 +215,7 @@ async def export_inventory(message: Message):
         InputFile(file_stream, filename=f"{name}.xlsx")
     )
 
+
 # ================= ADMIN PANEL =================
 
 @dp.message(F.text == "🛠 Админ панель")
@@ -244,17 +223,66 @@ async def admin_panel(message: Message):
     if message.from_user.id not in ADMIN_IDS:
         return
 
-    keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🗑 Удалить инвентаризацию")],
-            [KeyboardButton(text="📅 Фильтр по дате")],
-            [KeyboardButton(text="🔙 Главное меню")]
-        ],
-        resize_keyboard=True
+    keyboard = [
+        [KeyboardButton(text="🗑 Удалить инвентаризацию")],
+        [KeyboardButton(text="🔙 Главное меню")]
+    ]
+
+    await message.answer(
+        "Админ панель:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
     )
 
-    await message.answer("Админ панель:", reply_markup=keyboard)
 
+# ================= DELETE WITH BUTTONS =================
+
+@dp.message(F.text == "🗑 Удалить инвентаризацию")
+async def choose_delete_inventory(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("SELECT DISTINCT name FROM inventory ORDER BY name DESC")
+    rows = cur.fetchall()
+
+    cur.close()
+    conn.close()
+
+    if not rows:
+        await message.answer("Нет инвентаризаций для удаления.")
+        return
+
+    buttons = [[KeyboardButton(text=f"❌ {row[0]}")] for row in rows]
+    buttons.append([KeyboardButton(text="🔙 Главное меню")])
+
+    await message.answer(
+        "Выберите что удалить:",
+        reply_markup=ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+    )
+
+
+@dp.message(F.text.startswith("❌ "))
+async def delete_inventory(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    name = message.text.replace("❌ ", "")
+
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("DELETE FROM inventory WHERE name = %s", (name,))
+    conn.commit()
+
+    cur.close()
+    conn.close()
+
+    await message.answer(f"Инвентаризация '{name}' удалена.")
+
+
+# ================= BACK =================
 
 @dp.message(F.text == "🔙 Главное меню")
 async def back_to_menu(message: Message):
@@ -262,47 +290,6 @@ async def back_to_menu(message: Message):
         "Главное меню:",
         reply_markup=main_menu(message.from_user.id)
     )
-
-# ================= DELETE INVENTORY =================
-
-@dp.message(F.text == "🗑 Удалить инвентаризацию")
-async def delete_inventory(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    await message.answer("Напишите точное название инвентаризации для удаления:")
-
-
-@dp.message()
-async def delete_by_name(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    name = message.text
-
-    conn = get_conn()
-    cur = conn.cursor()
-
-    cur.execute("DELETE FROM inventory WHERE name = %s", (name,))
-    deleted = cur.rowcount
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    if deleted:
-        await message.answer(f"Инвентаризация '{name}' удалена.")
-    else:
-        await message.answer("Ничего не найдено.")
-
-# ================= FILTER BY DATE =================
-
-@dp.message(F.text == "📅 Фильтр по дате")
-async def filter_by_date(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-
-    await message.answer("Введите дату в формате YYYY-MM-DD:")
 
 
 # ================= WEBHOOK =================
@@ -313,12 +300,14 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
+
 # ================= STARTUP =================
 
 @app.on_event("startup")
 async def startup():
     await bot.set_webhook(f"{BASE_WEB_URL}/webhook")
     logging.info("Webhook установлен")
+
 
 # ================= RUN =================
 
