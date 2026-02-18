@@ -4,8 +4,11 @@ from datetime import datetime
 from io import BytesIO
 
 import psycopg2
+import uvicorn
 from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message,
@@ -17,7 +20,6 @@ from aiogram.types import (
 )
 from aiogram.filters import CommandStart
 from openpyxl import Workbook
-import uvicorn
 
 # ================= CONFIG =================
 
@@ -46,8 +48,13 @@ app = FastAPI()
 
 # ================= STATIC =================
 
+app.mount("/static", StaticFiles(directory="static"), name="static")
 app.mount("/data", StaticFiles(directory="data"), name="data")
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+
+# Главная страница
+@app.get("/")
+async def index():
+    return FileResponse("static/index.html")
 
 # ================= DB =================
 
@@ -106,9 +113,12 @@ async def start(message: Message):
 async def save_inventory(request: Request):
     data = await request.json()
 
-    user_id = data["user_id"]
-    name = data["filename"]   # ← исправлено
-    items = data["items"]
+    user_id = data.get("user_id")
+    name = data.get("filename")
+    items = data.get("items", [])
+
+    if not user_id or not name:
+        return {"error": "invalid data"}
 
     conn = get_conn()
     cur = conn.cursor()
@@ -138,7 +148,10 @@ async def save_inventory(request: Request):
 # ================= LOAD LAST INVENTORY =================
 
 @app.get("/load_last_inventory")
-async def load_last_inventory(user_id: int):
+async def load_last_inventory(user_id: int | None = None):
+
+    if not user_id:
+        return {}
 
     conn = get_conn()
     cur = conn.cursor()
@@ -158,11 +171,7 @@ async def load_last_inventory(user_id: int):
     cur.close()
     conn.close()
 
-    result = {}
-    for article, qty in rows:
-        result[str(article)] = float(qty)
-
-    return result
+    return {str(a): float(q) for a, q in rows}
 
 # ================= LIST INVENTORIES =================
 
@@ -229,14 +238,6 @@ async def export_inventory(message: Message):
         InputFile(file_stream, filename=f"{name}.xlsx")
     )
 
-# ================= ADMIN PANEL =================
-
-@dp.message(F.text == "🛠 Админ панель")
-async def admin_panel(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        return
-    await message.answer("Админ панель активна.")
-
 # ================= WEBHOOK =================
 
 @app.post("/webhook")
@@ -245,13 +246,12 @@ async def telegram_webhook(request: Request):
     await dp.feed_update(bot, update)
     return {"ok": True}
 
+# ================= STARTUP =================
+
 @app.on_event("startup")
 async def startup():
     await bot.set_webhook(f"{BASE_WEB_URL}/webhook")
-
-@app.on_event("shutdown")
-async def shutdown():
-    await bot.delete_webhook()
+    logging.info("Webhook установлен")
 
 # ================= RUN =================
 
